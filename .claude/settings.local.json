@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python main.py:*)",
+      "Bash(pip install:*)",
+      "Bash(streamlit run:*)",
+      "Bash(powershell -Command \"(Get-Content app.py) -replace ''if len\\(path\\) > grid_size \\* 3: break'', '''' | Set-Content app.py\")",
+      "Bash(taskkill:*)",
+      "Bash(python app.py:*)",
+      "Bash(dir:*)",
+      "Bash(mkdir:*)",
+      "Bash(find:*)",
+      "Bash(.venv/Scripts/python.exe:*)",
+      "Bash(.venv/Scripts/pip.exe:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
