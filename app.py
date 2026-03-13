@@ -26,7 +26,7 @@ def train_and_get_path(
 
     Args:
         grid_size: Size of the patrol grid.
-        alpha: Risk weight parameter.
+        alpha: Influence weight parameter.
         beta: Movement cost parameter.
         gamma: Surveillance effect parameter.
         map_seed: Random seed for map generation.
@@ -35,7 +35,7 @@ def train_and_get_path(
         Tuple of (environment, path).
     """
     weights = RewardWeights(alpha=alpha, beta=beta, gamma=gamma)
-    trainer = PatrolTrainer(grid_size=grid_size, weights=weights, seed=map_seed)
+    trainer = PatrolTrainer(grid_rows=grid_size, weights=weights, seed=map_seed)
     result = trainer.train_and_get_path()
     return result.env, result.path
 

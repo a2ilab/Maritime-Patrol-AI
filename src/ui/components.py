@@ -75,7 +75,7 @@ def render_parameter_sliders() -> tuple[float, float, float]:
     st.sidebar.subheader("Parameter Settings")
 
     alpha: float = st.sidebar.slider(
-        "Risk Weight (Alpha)",
+        "Influence Weight (Alpha)",
         min_value=ALPHA_RANGE[0],
         max_value=ALPHA_RANGE[1],
         key="alpha",
@@ -147,11 +147,11 @@ def render_main_content(
 
     with col2:
         st.subheader("Report")
-        total_risk = float(np.sum([env.risk_map[p] for p in path]))
+        total_influence = float(np.sum([env.influence_map[p] for p in path]))
         strategy_name = get_strategy_name(alpha, beta, gamma)
 
         st.info(f"Current Strategy: **{strategy_name}**")
         st.metric("Total Distance", f"{len(path)} cells")
-        st.metric("Risk Score", f"{total_risk:.1f}")
+        st.metric("Influence Score", f"{total_influence:.1f}")
         st.markdown("---")
         st.caption("Click sidebar buttons to change strategy.")

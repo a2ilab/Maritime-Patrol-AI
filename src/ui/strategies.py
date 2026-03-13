@@ -41,7 +41,7 @@ def get_strategy_name(alpha: float, beta: float, gamma: float) -> str:
     """Determine strategy name from parameters.
 
     Args:
-        alpha: Risk weight parameter.
+        alpha: Influence weight parameter.
         beta: Movement cost parameter.
         gamma: Surveillance effect parameter.
 

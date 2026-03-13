@@ -1,0 +1,19 @@
+{
+  "requestId": "REQ-20260309-001",
+  "filter": {
+    "startTime": "2026-03-01T00:00:00Z",
+    "endTime": "2026-03-09T23:59:59Z",
+    "shipId": "ALL",
+    "accidentType": "ALL"
+  },
+  "options": {
+    "includeRoute": true,
+    "includeAccidentZone": true,
+    "includeLabels": true
+  },
+  "strategy": "safety",
+  "polygon": [
+    {"lat": 35.97530, "lng": 126.5657},
+    {"lat": 36.0528187, "lng": 126.1917131}
+  ]
+}

@@ -21,10 +21,10 @@ def create_hover_text(env: MaritimePatrolEnv) -> list[list[str]]:
     Returns:
         2D list of hover text strings.
     """
-    gs = env.grid_size
+    rows, cols = env.grid_rows, env.grid_cols
     return [
-        [f"({r},{c})\nRisk: {env.risk_map[r][c]:.2f}" for c in range(gs)]
-        for r in range(gs)
+        [f"({r},{c})\nInfluence: {env.influence_map[r][c]:.2f}" for c in range(cols)]
+        for r in range(rows)
     ]
 
 
@@ -35,7 +35,7 @@ def create_patrol_figure(
     """Create Plotly figure for patrol visualization.
 
     Args:
-        env: Maritime patrol environment with risk maps.
+        env: Maritime patrol environment with influence maps.
         path: List of positions representing the patrol path.
 
     Returns:
@@ -47,13 +47,13 @@ def create_patrol_figure(
 
     fig.add_trace(
         go.Heatmap(
-            z=env.risk_map,
+            z=env.influence_map,
             text=hover_text,
             hoverinfo="text",
             texttemplate="%{z:.1f}",
             textfont={"size": 12},
             colorscale="Reds",
-            name="Risk",
+            name="Influence",
         )
     )
 

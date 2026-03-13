@@ -1,0 +1,16 @@
+---
+description: 코드 수정 시 서버 재구동
+alwaysApply: true
+---
+
+# 서버 재구동
+
+코드 수정 후에는 항상 다음 서버들을 재구동한다:
+
+1. **Maritime Patrol API** (포트 8000): `py api.py`
+2. **Map Viewer** (포트 8502): `cd map-viewer && py run.py`
+
+재구동 순서:
+1. 기존 프로세스 종료 (포트 8000, 8502)
+2. API 서버 백그라운드 실행
+3. Map Viewer 서버 백그라운드 실행

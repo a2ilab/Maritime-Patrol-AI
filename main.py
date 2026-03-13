@@ -15,7 +15,7 @@ from src.core.trainer import PatrolTrainer, RewardWeights
 
 
 def visualize_path(trainer: PatrolTrainer, path: list[tuple[int, int]]) -> None:
-    """Visualize the patrol path on a risk heatmap.
+    """Visualize the patrol path on an influence heatmap.
 
     Args:
         trainer: Trained PatrolTrainer instance.
@@ -24,11 +24,11 @@ def visualize_path(trainer: PatrolTrainer, path: list[tuple[int, int]]) -> None:
     plt.figure(figsize=(10, 8))
 
     sns.heatmap(
-        trainer.env.risk_map,
+        trainer.env.influence_map,
         cmap="Reds",
         annot=True,
         fmt=".1f",
-        cbar_kws={"label": "Risk Score"},
+        cbar_kws={"label": "Influence Score"},
     )
 
     path_y = [p[0] + 0.5 for p in path]
@@ -46,7 +46,7 @@ def visualize_path(trainer: PatrolTrainer, path: list[tuple[int, int]]) -> None:
     plt.scatter(path_x[0], path_y[0], color="green", s=200, label="Start", zorder=5)
     plt.scatter(path_x[-1], path_y[-1], color="black", s=200, label="End", zorder=5)
 
-    plt.title("PoC Result: Risk-based AI Patrol Route")
+    plt.title("PoC Result: Influence-based AI Patrol Route")
     plt.legend()
     plt.show()
 
@@ -62,7 +62,7 @@ def main() -> None:
     )
 
     trainer = PatrolTrainer(
-        grid_size=DEFAULT_GRID_SIZE,
+        grid_rows=DEFAULT_GRID_SIZE,
         weights=weights,
         seed=42,
         episodes=1000,
@@ -73,7 +73,7 @@ def main() -> None:
 
     print("Training complete! Generating optimal route.")
     print(f"Route length: {len(result.path)} cells")
-    print(f"Total risk score: {np.sum([result.env.risk_map[p] for p in result.path]):.1f}")
+    print(f"Total influence score: {np.sum([result.env.influence_map[p] for p in result.path]):.1f}")
 
     visualize_path(trainer, result.path)
 

@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maritime Patrol - 지도 뷰어</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: 'Segoe UI', sans-serif; }
+        .header {
+            background: #1a365d;
+            color: white;
+            padding: 1rem 1.5rem;
+        }
+        .header h1 { margin: 0; font-size: 1.25rem; }
+        .container { display: flex; height: calc(100vh - 52px); }
+        .sidebar {
+            width: 280px;
+            background: #f7fafc;
+            padding: 1rem;
+            overflow-y: auto;
+            border-right: 1px solid #e2e8f0;
+        }
+        .sidebar h2 { margin: 0 0 1rem; font-size: 1rem; color: #2d3748; }
+        .form-group { margin-bottom: 1rem; }
+        .form-group label { display: block; font-size: 0.875rem; color: #4a5568; margin-bottom: 0.25rem; }
+        .form-group select, .form-group input { width: 100%; padding: 0.5rem; border: 1px solid #cbd5e0; border-radius: 4px; }
+        .btn {
+            width: 100%;
+            padding: 0.75rem;
+            background: #3182ce;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 0.5rem;
+        }
+        .btn:hover { background: #2c5282; }
+        .map-area {
+            flex: 1;
+            min-height: 400px;
+            position: relative;
+        }
+        #map {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            width: 100%;
+            height: 100%;
+            min-height: 400px;
+            background: #e2e8f0;
+        }
+        .error-box {
+            padding: 1rem;
+            background: #fed7d7;
+            color: #c53030;
+            border-radius: 4px;
+            margin-bottom: 1rem;
+            font-size: 0.875rem;
+        }
+        .info-box {
+            padding: 0.75rem;
+            background: #ebf8ff;
+            color: #2b6cb0;
+            border-radius: 4px;
+            margin-bottom: 1rem;
+            font-size: 0.875rem;
+        }
+        .summary { font-size: 0.8rem; color: #718096; margin-top: 1rem; }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <h1>AI 해양 경비순찰 경로분석 - 지도 뷰어</h1>
+    </header>
+    <div class="container">
+        <aside class="sidebar">
+            <h2>설정</h2>
+            <form method="post" action="/generate">
+                <div class="form-group">
+                    <label>전략</label>
+                    <select name="strategy">
+                        <option value="safety" {{ 'selected' if strategy == 'safety' else '' }}>안전 우선</option>
+                        <option value="efficiency" {{ 'selected' if strategy == 'efficiency' else '' }}>효율 우선</option>
+                        <option value="surveillance" {{ 'selected' if strategy == 'surveillance' else '' }}>광역 감시</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>순찰 출발지</label>
+                    <select name="port">
+                        <option value="gunsan" {{ 'selected' if port == 'gunsan' else '' }}>군산항</option>
+                        <option value="" {{ 'selected' if not port else '' }}>없음 (격자 기준)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label><input type="checkbox" id="cb_route" name="include_route" value="1" {{ 'checked' if include_route else '' }}> 경로 표시</label>
+                </div>
+                <div class="form-group">
+                    <label><input type="checkbox" id="cb_zones" name="include_accident_zone" value="1" {{ 'checked' if include_accident_zone else '' }}> 순찰 지역 표시</label>
+                </div>
+                <div class="form-group">
+                    <label><input type="checkbox" id="cb_labels" name="include_labels" value="1" {{ 'checked' if include_labels else '' }}> 라벨 표시</label>
+                </div>
+                <div class="form-group">
+                    <label><input type="checkbox" id="cb_grid" name="include_grid" value="1" {{ 'checked' if include_grid else '' }}> 격자 표시</label>
+                </div>
+                <button type="submit" class="btn">경로 생성</button>
+            </form>
+            {% if error %}
+            <div class="error-box">{{ error }}</div>
+            {% endif %}
+            {% if summary %}
+            <div class="info-box">
+                경로 {{ summary.routeCount }}개, 순찰 필요 지역 {{ summary.patrolZoneCount or summary.accidentCount }}개
+            </div>
+            <div class="summary">requestId: {{ request_id or '-' }}</div>
+            {% endif %}
+        </aside>
+        <main class="map-area">
+            <div id="map"></div>
+        </main>
+    </div>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            try {
+                var mapData = {{ map_data | safe }};
+                var mapEl = document.getElementById('map');
+                if (!mapEl) { console.error('Map element not found'); return; }
+                if (typeof L === 'undefined') { console.error('Leaflet not loaded'); return; }
+
+                if (window._maritimeMap) {
+                    window._maritimeMap.remove();
+                    window._maritimeMap = null;
+                }
+
+                var map = L.map('map').setView([36.014, 126.38], 10);
+                window._maritimeMap = map;
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '&copy; OpenStreetMap'
+                }).addTo(map);
+
+                var routeLayer = L.layerGroup();
+                var zonesLayer = L.layerGroup();
+                var labelsLayer = L.layerGroup();
+                var gridLayer = L.layerGroup();
+
+                var influencePane = map.createPane('influence');
+                influencePane.style.zIndex = 350;
+
+                var bounds = [];
+                function influenceToColor(influence) {
+                    var red = Math.round(255 - 80 * influence);
+                    var green = Math.round(120 * (1 - influence));
+                    var blue = Math.round(120 * (1 - influence));
+                    var opacity = 0.25 + 0.4 * influence;
+                    return { color: 'rgb(' + red + ',' + green + ',' + blue + ')', opacity: opacity };
+                }
+
+                if (mapData.grid && mapData.grid.bbox) {
+                    var influenceData = mapData.grid.influence || mapData.grid.risk || [];
+                    if (influenceData.length === 0 && mapData.grid.rows && mapData.grid.cols) {
+                        var rc = mapData.grid.rows * mapData.grid.cols;
+                        for (var k = 0; k < rc; k++) influenceData.push(0.5);
+                    }
+                    if (influenceData.length && mapData.grid.bbox) {
+                        var g = mapData.grid;
+                        var b = g.bbox;
+                        var latMin = b.latMin || b.lat_min, latMax = b.latMax || b.lat_max;
+                        var lngMin = b.lngMin || b.lng_min, lngMax = b.lngMax || b.lng_max;
+                        var rows = g.rows || 1, cols = g.cols || 1;
+                        var dLat = (latMax - latMin) / rows, dLng = (lngMax - lngMin) / cols;
+                        g.influence = influenceData;
+                        for (var i = 0; i < rows; i++) {
+                            for (var j = 0; j < cols; j++) {
+                                var idx = i * cols + j;
+                                var influence = Math.min(1, Math.max(0, g.influence[idx] || 0));
+                                var c = influenceToColor(influence);
+                                var sw = [latMax - (i+1)*dLat, lngMax - (j+1)*dLng];
+                                var ne = [latMax - i*dLat, lngMax - j*dLng];
+                                var popupHtml = '순찰 필요성: ' + (influence * 100).toFixed(1) + '%';
+                                if (g.staticInfluence && g.staticInfluence.length && g.dynamicInfluence && g.environmentInfluence) {
+                                    var si = (g.staticInfluence[idx] || 0) * 100;
+                                    var di = (g.dynamicInfluence[idx] || 0) * 100;
+                                    var ei = (g.environmentInfluence[idx] || 0) * 100;
+                                    popupHtml += '<br><small>정적위험 ' + si.toFixed(0) + '% + 동적위험 ' + di.toFixed(0) + '% + 환경제약 ' + ei.toFixed(0) + '%</small>';
+                                }
+                                L.rectangle([sw, ne], {
+                                    color: 'transparent',
+                                    fillColor: c.color,
+                                    fillOpacity: c.opacity,
+                                    weight: 0,
+                                    pane: 'influence'
+                                }).bindPopup(popupHtml).addTo(gridLayer);
+                                bounds.push(sw, ne);
+                            }
+                        }
+                    }
+                }
+
+                if (mapData && mapData.routes && mapData.routes.length) {
+                    mapData.routes.forEach(function(r) {
+                        if (r.path && r.path.length) {
+                            var latlngs = r.path.map(function(p) { return [p.lat, p.lng]; });
+                            bounds = bounds.concat(latlngs);
+                            L.polyline(latlngs, {color: 'blue', weight: 5}).addTo(routeLayer);
+                            L.marker(latlngs[0]).bindPopup('출발').addTo(routeLayer);
+                            L.marker(latlngs[latlngs.length-1]).bindPopup('도착').addTo(routeLayer);
+                        }
+                    });
+                }
+
+                var zones = mapData.patrolZones || mapData.accidents || [];
+                if (zones.length) {
+                    zones.forEach(function(a) {
+                        var nec = a.patrolNecessity !== undefined ? a.patrolNecessity : 1;
+                        if (nec < 0.75) return;
+                        if (!a.center) return;
+                        bounds.push([a.center.lat, a.center.lng]);
+                        var necPct = (nec * 100).toFixed(0);
+                        var popupText = '<strong>' + (a.label || '순찰필요') + '</strong>';
+                        popupText += '<br>경비 필요성: <strong>' + necPct + '%</strong>';
+                        popupText += '<br>반경: ' + Math.round(a.radius || 0) + 'm';
+                        if (a.staticScore !== undefined && a.dynamicScore !== undefined && a.environmentScore !== undefined) {
+                            popupText += '<br><br><strong>경비 필요성이 높은 이유:</strong>';
+                            popupText += '<table style="margin-top:4px;font-size:12px;border-collapse:collapse;">';
+                            popupText += '<tr><td style="padding:2px 8px 2px 0;">정적위험</td><td style="padding:2px 0;"><strong>' + (a.staticScore * 100).toFixed(0) + '%</strong></td><td style="padding:2px 0 2px 6px;color:#666;">어선 감시·구명조끼·단독어업 등</td></tr>';
+                            popupText += '<tr><td style="padding:2px 8px 2px 0;">동적위험</td><td style="padding:2px 0;"><strong>' + (a.dynamicScore * 100).toFixed(0) + '%</strong></td><td style="padding:2px 0 2px 6px;color:#666;">선박 과속·대형선 접근 등</td></tr>';
+                            popupText += '<tr><td style="padding:2px 8px 2px 0;">환경제약</td><td style="padding:2px 0;"><strong>' + (a.environmentScore * 100).toFixed(0) + '%</strong></td><td style="padding:2px 0 2px 6px;color:#666;">조류·기상·해황 등</td></tr>';
+                            popupText += '</table>';
+                        }
+                        L.circle([a.center.lat, a.center.lng], {
+                            radius: a.radius || 500,
+                            color: 'red',
+                            fillColor: 'red',
+                            fillOpacity: 0.3
+                        }).bindPopup(popupText, {maxWidth: 350}).addTo(zonesLayer);
+                    });
+                }
+
+                if (mapData.labels && mapData.labels.length) {
+                    mapData.labels.forEach(function(lb) {
+                        bounds.push([lb.lat, lb.lng]);
+                        L.marker([lb.lat, lb.lng]).bindPopup(lb.text || '').addTo(labelsLayer);
+                    });
+                }
+
+                if (mapData.grid && mapData.grid.bbox) {
+                    var b = mapData.grid.bbox;
+                    bounds.push([b.latMin || b.lat_min, b.lngMin || b.lng_min], [b.latMax || b.lat_max, b.lngMax || b.lng_max]);
+                }
+
+                function updateLayers() {
+                    if (document.getElementById('cb_route').checked) map.addLayer(routeLayer);
+                    else map.removeLayer(routeLayer);
+                    if (document.getElementById('cb_zones').checked) map.addLayer(zonesLayer);
+                    else map.removeLayer(zonesLayer);
+                    if (document.getElementById('cb_labels').checked) map.addLayer(labelsLayer);
+                    else map.removeLayer(labelsLayer);
+                    if (document.getElementById('cb_grid').checked) map.addLayer(gridLayer);
+                    else map.removeLayer(gridLayer);
+                }
+
+                ['cb_route', 'cb_zones', 'cb_labels', 'cb_grid'].forEach(function(id) {
+                    document.getElementById(id).addEventListener('change', updateLayers);
+                });
+
+                updateLayers();
+                if (bounds.length) map.fitBounds(bounds, {padding: [50, 50]});
+                map.invalidateSize();
+            } catch (e) { console.error('Map init error:', e); }
+        });
+    </script>
+</body>
+</html>
