@@ -39,6 +39,10 @@
             margin-top: 0.5rem;
         }
         .btn:hover { background: #2c5282; }
+        .btn:disabled { background: #a0aec0; cursor: not-allowed; }
+        .btn-simulation { background: #38a169; }
+        .btn-simulation:hover:not(:disabled) { background: #2f855a; }
+        .sim-hint { font-size: 0.75rem; color: #718096; margin-top: 0.35rem; margin-bottom: 0; }
         .map-area {
             flex: 1;
             min-height: 400px;
@@ -69,6 +73,12 @@
             font-size: 0.875rem;
         }
         .summary { font-size: 0.8rem; color: #718096; margin-top: 1rem; }
+        .poi-detail-popup .leaflet-popup-content-wrapper { border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.15); }
+        .poi-detail-popup .leaflet-popup-content { margin: 12px 14px; min-width: 280px; }
+        .poi-always-label { font-size: 11px; line-height: 1.3; text-align: center; white-space: nowrap; max-width: 80px; overflow: hidden; text-overflow: ellipsis; }
+        .poi-always-tooltip { background: rgba(255,255,255,0.95); border: 1px solid #e2e8f0; padding: 4px 6px; border-radius: 4px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); pointer-events: none; }
+        .outline-no-hit { pointer-events: none !important; }
+        path.outline-no-hit { pointer-events: none !important; }
     </style>
 </head>
 <body>
@@ -80,12 +90,12 @@
             <h2>설정</h2>
             <form method="post" action="/generate">
                 <div class="form-group">
-                    <label>전략</label>
-                    <select name="strategy">
-                        <option value="safety" {{ 'selected' if strategy == 'safety' else '' }}>안전 우선</option>
-                        <option value="efficiency" {{ 'selected' if strategy == 'efficiency' else '' }}>효율 우선</option>
-                        <option value="surveillance" {{ 'selected' if strategy == 'surveillance' else '' }}>광역 감시</option>
-                    </select>
+                    <label>순찰 시작 시간</label>
+                    <input type="datetime-local" name="start_time" value="{{ start_time or '2026-03-01T00:00' }}">
+                </div>
+                <div class="form-group">
+                    <label>순찰 종료 시간</label>
+                    <input type="datetime-local" name="end_time" value="{{ end_time or '2026-03-09T23:59' }}">
                 </div>
                 <div class="form-group">
                     <label>순찰 출발지</label>
@@ -101,19 +111,20 @@
                     <label><input type="checkbox" id="cb_zones" name="include_accident_zone" value="1" {{ 'checked' if include_accident_zone else '' }}> 순찰 지역 표시</label>
                 </div>
                 <div class="form-group">
-                    <label><input type="checkbox" id="cb_labels" name="include_labels" value="1" {{ 'checked' if include_labels else '' }}> 라벨 표시</label>
-                </div>
-                <div class="form-group">
-                    <label><input type="checkbox" id="cb_grid" name="include_grid" value="1" {{ 'checked' if include_grid else '' }}> 격자 표시</label>
+                    <label><input type="checkbox" id="cb_outline" name="include_grid" value="1" {{ 'checked' if include_grid else '' }}> 영역 외곽선 표시</label>
                 </div>
                 <button type="submit" class="btn">경로 생성</button>
             </form>
+            <div class="form-group" style="margin-top: 1.25rem;">
+                <button type="button" id="btn_simulation" class="btn btn-simulation" disabled>시뮬레이션 시작!</button>
+                <p class="sim-hint">경로 생성 후, 30초 동안 경비선이 경로를 따라 이동합니다.</p>
+            </div>
             {% if error %}
             <div class="error-box">{{ error }}</div>
             {% endif %}
             {% if summary %}
             <div class="info-box">
-                경로 {{ summary.routeCount }}개, 순찰 필요 지역 {{ summary.patrolZoneCount or summary.accidentCount }}개
+                경로 {{ summary.routeCount }}개, 순찰 필요 지역 {{ summary.patrolZoneCount or summary.accidentCount }}개{% if summary.timeSlotCount %}, {{ summary.timeSlotCount }}시간대{% endif %}
             </div>
             <div class="summary">requestId: {{ request_id or '-' }}</div>
             {% endif %}
@@ -143,62 +154,21 @@
 
                 var routeLayer = L.layerGroup();
                 var zonesLayer = L.layerGroup();
-                var labelsLayer = L.layerGroup();
-                var gridLayer = L.layerGroup();
-
-                var influencePane = map.createPane('influence');
-                influencePane.style.zIndex = 350;
+                var outlineLayer = L.layerGroup();
+                var simulationLayer = L.layerGroup();
 
                 var bounds = [];
-                function influenceToColor(influence) {
-                    var red = Math.round(255 - 80 * influence);
-                    var green = Math.round(120 * (1 - influence));
-                    var blue = Math.round(120 * (1 - influence));
-                    var opacity = 0.25 + 0.4 * influence;
-                    return { color: 'rgb(' + red + ',' + green + ',' + blue + ')', opacity: opacity };
-                }
-
                 if (mapData.grid && mapData.grid.bbox) {
-                    var influenceData = mapData.grid.influence || mapData.grid.risk || [];
-                    if (influenceData.length === 0 && mapData.grid.rows && mapData.grid.cols) {
-                        var rc = mapData.grid.rows * mapData.grid.cols;
-                        for (var k = 0; k < rc; k++) influenceData.push(0.5);
-                    }
-                    if (influenceData.length && mapData.grid.bbox) {
-                        var g = mapData.grid;
-                        var b = g.bbox;
-                        var latMin = b.latMin || b.lat_min, latMax = b.latMax || b.lat_max;
-                        var lngMin = b.lngMin || b.lng_min, lngMax = b.lngMax || b.lng_max;
-                        var rows = g.rows || 1, cols = g.cols || 1;
-                        var dLat = (latMax - latMin) / rows, dLng = (lngMax - lngMin) / cols;
-                        g.influence = influenceData;
-                        for (var i = 0; i < rows; i++) {
-                            for (var j = 0; j < cols; j++) {
-                                var idx = i * cols + j;
-                                var influence = Math.min(1, Math.max(0, g.influence[idx] || 0));
-                                var c = influenceToColor(influence);
-                                var sw = [latMax - (i+1)*dLat, lngMax - (j+1)*dLng];
-                                var ne = [latMax - i*dLat, lngMax - j*dLng];
-                                var popupHtml = '순찰 필요성: ' + (influence * 100).toFixed(1) + '%';
-                                if (g.staticInfluence && g.staticInfluence.length && g.dynamicInfluence && g.environmentInfluence) {
-                                    var si = (g.staticInfluence[idx] || 0) * 100;
-                                    var di = (g.dynamicInfluence[idx] || 0) * 100;
-                                    var ei = (g.environmentInfluence[idx] || 0) * 100;
-                                    popupHtml += '<br><small>정적위험 ' + si.toFixed(0) + '% + 동적위험 ' + di.toFixed(0) + '% + 환경제약 ' + ei.toFixed(0) + '%</small>';
-                                }
-                                L.rectangle([sw, ne], {
-                                    color: 'transparent',
-                                    fillColor: c.color,
-                                    fillOpacity: c.opacity,
-                                    weight: 0,
-                                    pane: 'influence'
-                                }).bindPopup(popupHtml).addTo(gridLayer);
-                                bounds.push(sw, ne);
-                            }
-                        }
-                    }
+                    var b = mapData.grid.bbox;
+                    var latMin = b.latMin || b.lat_min, latMax = b.latMax || b.lat_max;
+                    var lngMin = b.lngMin || b.lng_min, lngMax = b.lngMax || b.lng_max;
+                    var poly = [[latMax, lngMin], [latMax, lngMax], [latMin, lngMax], [latMin, lngMin]];
+                    var outlinePoly = L.polygon(poly, { color: '#2b6cb0', fillOpacity: 0, weight: 2, className: 'outline-no-hit' });
+                    outlinePoly.addTo(outlineLayer);
+                    bounds.push([latMin, lngMin], [latMax, lngMax]);
                 }
 
+                var pathForSimulation = null;
                 if (mapData && mapData.routes && mapData.routes.length) {
                     mapData.routes.forEach(function(r) {
                         if (r.path && r.path.length) {
@@ -209,7 +179,13 @@
                             L.marker(latlngs[latlngs.length-1]).bindPopup('도착').addTo(routeLayer);
                         }
                     });
+                    var firstRoute = mapData.routes[0];
+                    if (firstRoute && firstRoute.path && firstRoute.path.length >= 2) {
+                        pathForSimulation = firstRoute.path.map(function(p) { return [p.lat, p.lng]; });
+                    }
                 }
+                var btnSim = document.getElementById('btn_simulation');
+                if (btnSim) btnSim.disabled = !pathForSimulation;
 
                 var zones = mapData.patrolZones || mapData.accidents || [];
                 if (zones.length) {
@@ -219,30 +195,55 @@
                         if (!a.center) return;
                         bounds.push([a.center.lat, a.center.lng]);
                         var necPct = (nec * 100).toFixed(0);
-                        var popupText = '<strong>' + (a.label || '순찰필요') + '</strong>';
-                        popupText += '<br>경비 필요성: <strong>' + necPct + '%</strong>';
-                        popupText += '<br>반경: ' + Math.round(a.radius || 0) + 'm';
+                        var timeSlotText = (a.timeSlotIndex !== undefined && a.timeSlotIndex !== null) ? a.timeSlotIndex + '시간대' : '';
+                        var shortReason = (a.type || a.label || '순찰필요').toString().substring(0, 10);
+                        var alwaysLabel = '<div class="poi-always-label">' + (timeSlotText ? timeSlotText + '<br>' : '') + shortReason + '</div>';
+
+                        var popupHtml = '<div class="poi-popup">';
+                        popupHtml += '<div style="font-size:13px;"><strong>격자 셀 순찰 필요성</strong><br>' + necPct + '%</div>';
                         if (a.staticScore !== undefined && a.dynamicScore !== undefined && a.environmentScore !== undefined) {
-                            popupText += '<br><br><strong>경비 필요성이 높은 이유:</strong>';
-                            popupText += '<table style="margin-top:4px;font-size:12px;border-collapse:collapse;">';
-                            popupText += '<tr><td style="padding:2px 8px 2px 0;">정적위험</td><td style="padding:2px 0;"><strong>' + (a.staticScore * 100).toFixed(0) + '%</strong></td><td style="padding:2px 0 2px 6px;color:#666;">어선 감시·구명조끼·단독어업 등</td></tr>';
-                            popupText += '<tr><td style="padding:2px 8px 2px 0;">동적위험</td><td style="padding:2px 0;"><strong>' + (a.dynamicScore * 100).toFixed(0) + '%</strong></td><td style="padding:2px 0 2px 6px;color:#666;">선박 과속·대형선 접근 등</td></tr>';
-                            popupText += '<tr><td style="padding:2px 8px 2px 0;">환경제약</td><td style="padding:2px 0;"><strong>' + (a.environmentScore * 100).toFixed(0) + '%</strong></td><td style="padding:2px 0 2px 6px;color:#666;">조류·기상·해황 등</td></tr>';
-                            popupText += '</table>';
+                            var si = ((a.staticScore || 0) * 100).toFixed(0);
+                            var di = ((a.dynamicScore || 0) * 100).toFixed(0);
+                            var ei = ((a.environmentScore || 0) * 100).toFixed(0);
+                            popupHtml += '<table style="margin-top:6px;font-size:12px;border-collapse:collapse;">';
+                            popupHtml += '<tr><td style="padding:2px 6px 2px 0;">정적위험</td><td>' + si + '%</td></tr>';
+                            popupHtml += '<tr><td style="padding:2px 6px 2px 0;">동적위험</td><td>' + di + '%</td></tr>';
+                            popupHtml += '<tr><td style="padding:2px 6px 2px 0;">환경제약</td><td>' + ei + '%</td></tr>';
+                            popupHtml += '</table>';
                         }
-                        L.circle([a.center.lat, a.center.lng], {
-                            radius: a.radius || 500,
+                        popupHtml += '<table style="margin-top:8px;font-size:12px;border-collapse:collapse;width:100%;">';
+                        popupHtml += '<tr><td style="padding:2px 8px 2px 0;color:#4a5568;">라벨</td><td style="padding:2px 0;">' + (a.label || '순찰필요') + '</td></tr>';
+                        if (a.id) popupHtml += '<tr><td style="padding:2px 8px 2px 0;color:#4a5568;">ID</td><td style="padding:2px 0;">' + a.id + '</td></tr>';
+                        if (a.type) popupHtml += '<tr><td style="padding:2px 8px 2px 0;color:#4a5568;">유형</td><td style="padding:2px 0;"><span style="background:#feb2b2;padding:1px 4px;border-radius:3px;">' + a.type + '</span></td></tr>';
+                        popupHtml += '<tr><td style="padding:2px 8px 2px 0;color:#4a5568;">반경</td><td style="padding:2px 0;">' + Math.round(a.radius || 0) + ' m</td></tr>';
+                        popupHtml += '<tr><td style="padding:2px 8px 2px 0;color:#4a5568;">위도</td><td style="padding:2px 0;">' + (a.center.lat).toFixed(5) + '</td></tr>';
+                        popupHtml += '<tr><td style="padding:2px 8px 2px 0;color:#4a5568;">경도</td><td style="padding:2px 0;">' + (a.center.lng).toFixed(5) + '</td></tr>';
+                        if (a.scheduledTime) {
+                            var t = a.scheduledTime.replace('Z','').replace('T',' ').substring(0, 16);
+                            var slot = (a.timeSlotIndex !== undefined && a.timeSlotIndex !== null) ? a.timeSlotIndex + '시간대' : '';
+                            popupHtml += '<tr><td style="padding:2px 8px 2px 0;color:#4a5568;">방문 예정</td><td style="padding:2px 0;">' + t + (slot ? ' (' + slot + ')' : '') + '</td></tr>';
+                        }
+                        popupHtml += '</table>';
+                        popupHtml += '</div>';
+
+                        var radiusM = Math.max(a.radius || 500, 80);
+                        var circle = L.circle([a.center.lat, a.center.lng], {
+                            radius: radiusM,
                             color: 'red',
                             fillColor: 'red',
-                            fillOpacity: 0.3
-                        }).bindPopup(popupText, {maxWidth: 350}).addTo(zonesLayer);
-                    });
-                }
-
-                if (mapData.labels && mapData.labels.length) {
-                    mapData.labels.forEach(function(lb) {
-                        bounds.push([lb.lat, lb.lng]);
-                        L.marker([lb.lat, lb.lng]).bindPopup(lb.text || '').addTo(labelsLayer);
+                            fillOpacity: 0.3,
+                            weight: 2
+                        });
+                        circle.bindPopup(popupHtml, { maxWidth: 380, className: 'poi-detail-popup' });
+                        circle.on('click', function() { circle.openPopup(); });
+                        circle.bindTooltip(alwaysLabel, {
+                            permanent: true,
+                            direction: 'top',
+                            className: 'poi-always-tooltip',
+                            offset: [0, -10],
+                            interactive: false
+                        });
+                        circle.addTo(zonesLayer);
                     });
                 }
 
@@ -254,16 +255,51 @@
                 function updateLayers() {
                     if (document.getElementById('cb_route').checked) map.addLayer(routeLayer);
                     else map.removeLayer(routeLayer);
+                    if (document.getElementById('cb_outline').checked) map.addLayer(outlineLayer);
+                    else map.removeLayer(outlineLayer);
                     if (document.getElementById('cb_zones').checked) map.addLayer(zonesLayer);
                     else map.removeLayer(zonesLayer);
-                    if (document.getElementById('cb_labels').checked) map.addLayer(labelsLayer);
-                    else map.removeLayer(labelsLayer);
-                    if (document.getElementById('cb_grid').checked) map.addLayer(gridLayer);
-                    else map.removeLayer(gridLayer);
+                    if (window._boatMarker) map.addLayer(simulationLayer);
                 }
+                simulationLayer.addTo(map);
 
-                ['cb_route', 'cb_zones', 'cb_labels', 'cb_grid'].forEach(function(id) {
-                    document.getElementById(id).addEventListener('change', updateLayers);
+                function startSimulation() {
+                    if (!pathForSimulation || pathForSimulation.length < 2) return;
+                    if (window._simulationTimer) clearInterval(window._simulationTimer);
+                    window._simulationTimer = null;
+                    simulationLayer.clearLayers();
+                    var boatIcon = L.divIcon({
+                        html: '<div style="width:36px;height:36px;background:#1a365d;border:2px solid #fff;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;font-size:18px;">🚢</div>',
+                        className: '',
+                        iconSize: [36, 36],
+                        iconAnchor: [18, 18]
+                    });
+                    var boatMarker = L.marker(pathForSimulation[0], { icon: boatIcon });
+                    boatMarker.addTo(simulationLayer);
+                    window._boatMarker = boatMarker;
+                    var durationMs = 30000;
+                    var startTime = Date.now();
+                    function tick() {
+                        var elapsed = Date.now() - startTime;
+                        var progress = Math.min(1, elapsed / durationMs);
+                        var n = pathForSimulation.length;
+                        var seg = progress * (n - 1);
+                        var i0 = Math.floor(seg);
+                        var i1 = Math.min(i0 + 1, n - 1);
+                        var frac = seg - i0;
+                        var lat = pathForSimulation[i0][0] + frac * (pathForSimulation[i1][0] - pathForSimulation[i0][0]);
+                        var lng = pathForSimulation[i0][1] + frac * (pathForSimulation[i1][1] - pathForSimulation[i0][1]);
+                        boatMarker.setLatLng(L.latLng(lat, lng));
+                        if (boatMarker._update) boatMarker._update();
+                        if (progress >= 1) clearInterval(window._simulationTimer);
+                    }
+                    window._simulationTimer = setInterval(tick, 50);
+                }
+                if (btnSim) btnSim.addEventListener('click', startSimulation);
+
+                ['cb_route', 'cb_zones', 'cb_outline'].forEach(function(id) {
+                    var el = document.getElementById(id);
+                    if (el) el.addEventListener('change', updateLayers);
                 });
 
                 updateLayers();

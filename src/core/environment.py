@@ -77,10 +77,12 @@ class MaritimePatrolEnv:
         self._poi: frozenset[Position] = self._compute_poi()
 
     def _init_maps(self) -> None:
-        """Initialize influence and weather maps.
+        """관계성 레이어 3개 초기화 (당분간 랜덤. 포맷은 이후 AI 출력과 동일).
 
-        복합영향도 = 정적위험 + 동적위험 + 환경제약(weather) 가중합.
-        고영향도 셀은 HIGH_INFLUENCE_COUNT개(기본 10개)만 랜덤 위치에 배치.
+        - static_influence, dynamic_influence, weather_condition: 격자별 0~1 스칼라.
+        - 복합영향도 = 정적 + 동적 + 환경(weather) 가중합.
+        - 고영향도 셀은 HIGH_INFLUENCE_COUNT개만 랜덤 배치.
+        - 추후 AI 학습으로 "데이터-순찰경로 연관성" 레이어로 교체 시, 동일 shape/타입 유지.
         """
         r, c = self.grid_rows, self.grid_cols
         total_cells = r * c

@@ -161,12 +161,14 @@ python run.py
 
 | 항목 | 설명 |
 |------|------|
-| **전략** | `안전 우선` / `효율 우선` / `광역 감시` 중 선택 |
 | **순찰 출발지** | `군산항` 또는 `없음(격자 기준)` |
+| **순찰 시작·종료 시간** | filter.startTime / endTime 으로 API에 전달 (시간대별 순찰 구역 반영) |
 | **경로 표시** | 체크 시 경로 polyline 표시 (체크 해제 시 즉시 숨김) |
-| **순찰 지역 표시** | 체크 시 순찰 필요 지역(빨간 원) 표시 |
+| **순찰 지역 표시** | 체크 시 순찰 필요 지역(빨간 원) 표시. 클릭 시 상세 팝업 |
 | **라벨 표시** | 체크 시 라벨 마커 표시 |
 | **격자 표시** | 체크 시 영향도 색상 격자 표시 |
+
+※ 경로는 **안전 + 단시간** 기준으로만 생성됩니다. 전략(안전/효율/광역) 선택 UI는 제거된 상태입니다.
 
 ### 경로 생성
 
@@ -208,6 +210,17 @@ curl -X POST http://127.0.0.1:8000/inference \
 ### 상세 API 명세
 
 → [docs/API_SPEC.md](API_SPEC.md) 참고
+
+---
+
+## AIS 순찰/경비선 탐지 (search_patrol)
+
+부두에서 출발하는 궤적·과도 기동을 탐지해 순찰·경비선 후보를 뽑고, CSV·KML로 내보냅니다.
+
+- **실행**: `data/AIS/search_patrol/` 에서 `python search_patrol.py` (테스트: `--limit-files 1`)
+- **입력**: 상위 폴더 `data/AIS/` 의 `Dynamic_YYYYMMDD.csv`, `Static.csv`
+- **출력**: `patrol_candidates.csv`, `patrol_tracks.kml`, `candidate_Dynamic_YYYYMMDD.csv`
+- **상세**: [docs/search_patrol.md](search_patrol.md) 참고
 
 ---
 
@@ -264,22 +277,27 @@ python run.py
 
 ```
 Maritime-Patrol-AI/
-├── api.py                 # REST API 진입점
-├── start_servers.bat       # [단축] 서버 일괄 시작 (Windows)
+├── api.py                 # REST API 진입점 (포트 8000)
+├── start_servers.bat      # [단축] 서버 일괄 시작 (Windows)
 ├── restart_servers.ps1    # [단축] 서버 프로세스 종료 (PowerShell)
 ├── requirements.txt
 ├── docs/
+│   ├── README.md          # 문서·구현 복기용 개요 (먼저 읽기)
 │   ├── API_SPEC.md        # API JSON 명세서
-│   └── USAGE.md           # 사용 방법 (본 문서)
-├── map-viewer/
-│   ├── run.py             # Map Viewer 진입점
-│   ├── main.py            # FastAPI 앱
-│   ├── config.py          # API URL, 포트 설정
+│   ├── HOW_TO_USE.md      # 사용 방법 (본 문서)
+│   ├── algorithm.md       # 목표 알고리즘
+│   ├── TASKS.md           # 할 일 목록
+│   └── search_patrol.md   # AIS 순찰선 탐지 도구
+├── map-viewer/            # 지도 뷰어 (포트 8502)
+│   ├── run.py
+│   ├── config.py
 │   └── requirements.txt
-└── src/
-    ├── api/               # REST API 구현
-    ├── core/              # Q-Learning, 환경, 트레이너
-    └── config.py          # 학습/알고리즘 설정
+├── src/
+│   ├── api/               # REST API (inference 등)
+│   ├── core/              # learning_map, 환경, 트레이너
+│   └── config.py
+├── models/                # patrol_learning_map.npz (추론용 학습 맵)
+└── data/AIS/search_patrol # 순찰선 탐지 스크립트·결과(CSV/KML)
 ```
 
 ---

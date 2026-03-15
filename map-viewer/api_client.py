@@ -17,7 +17,6 @@ def call_inference(
     request_id: str = "REQ-MAP-VIEWER-001",
     start_time: str = "2026-03-01T00:00:00Z",
     end_time: str = "2026-03-09T23:59:59Z",
-    strategy: str = "safety",
     polygon: list[dict] | None = None,
     port: str | None = "gunsan",
     include_route: bool = True,
@@ -26,7 +25,7 @@ def call_inference(
     include_grid: bool = True,
     map_seed: int | None = None,
 ) -> dict:
-    """추론 API 호출.
+    """추론 API 호출. 경로는 안전+단시간 기준으로만 생성됨(전략 옵션 없음).
 
     Returns:
         API 응답 JSON (dict).
@@ -49,7 +48,6 @@ def call_inference(
             "includeLabels": include_labels,
             "includeGrid": include_grid,
         },
-        "strategy": strategy,
         "polygon": polygon or DEFAULT_POLYGON,
     }
     if port and str(port).strip() == "gunsan":

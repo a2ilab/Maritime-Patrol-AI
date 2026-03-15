@@ -33,10 +33,10 @@ _last_map_data: dict = {"routes": [], "patrolZones": [], "labels": []}
 def _to_map_data(data: dict | None) -> dict:
     """API 응답 → 지도 표시용 데이터."""
     if not data:
-        return {"routes": [], "patrolZones": [], "labels": [], "grid": None}
+        return {"routes": [], "patrolZones": [], "labels": [], "grid": None, "timeSlots": [], "routeSchedule": []}
     grid = data.get("grid")
     if grid and isinstance(grid, dict):
-        grid = grid  # pass through
+        grid = grid
     else:
         grid = None
     zones = data.get("patrolZones", data.get("accidents", []))
@@ -45,6 +45,8 @@ def _to_map_data(data: dict | None) -> dict:
         "patrolZones": zones,
         "labels": data.get("labels", []),
         "grid": grid,
+        "timeSlots": data.get("timeSlots", []),
+        "routeSchedule": data.get("routeSchedule", []),
     }
 
 
@@ -77,12 +79,10 @@ async def index(request: Request) -> HTMLResponse:
         request=request,
         name="index.html",
         context={
-            "strategy": "safety",
             "port": "gunsan",
+            "start_time": "2026-03-01T00:00",
+            "end_time": "2026-03-09T23:59",
             "include_route": True,
-            "include_accident_zone": True,
-            "include_labels": True,
-            "include_grid": True,
             "include_accident_zone": True,
             "include_labels": True,
             "include_grid": True,
@@ -97,8 +97,9 @@ async def index(request: Request) -> HTMLResponse:
 @app.post("/generate", response_class=HTMLResponse)
 async def generate(
     request: Request,
-    strategy: str = Form("safety"),
     port: str = Form("gunsan"),
+    start_time: str = Form("2026-03-01T00:00"),
+    end_time: str = Form("2026-03-09T23:59"),
     include_route: str = Form("0"),
     include_accident_zone: str = Form("0"),
     include_labels: str = Form("0"),
@@ -108,10 +109,19 @@ async def generate(
     global _last_map_data
     _last_map_data = {"routes": [], "patrolZones": [], "labels": [], "grid": None}
 
+    # ISO 8601 형태로 보정 (datetime-local은 'Z' 없이 옴)
+    start_iso = start_time if "T" in start_time else f"{start_time}T00:00:00"
+    end_iso = end_time if "T" in end_time else f"{end_time}T23:59:59"
+    if not start_iso.endswith("Z"):
+        start_iso += "Z"
+    if not end_iso.endswith("Z"):
+        end_iso += "Z"
+
     ctx = {
         "request": request,
-        "strategy": strategy,
         "port": port if port and port.strip() else None,
+        "start_time": start_time,
+        "end_time": end_time,
         "include_route": include_route == "1",
         "include_accident_zone": include_accident_zone == "1",
         "include_labels": include_labels == "1",
@@ -123,7 +133,8 @@ async def generate(
 
     try:
         data = call_inference(
-            strategy=strategy,
+            start_time=start_iso,
+            end_time=end_iso,
             port=ctx["port"],
             include_route=True,
             include_accident_zone=True,

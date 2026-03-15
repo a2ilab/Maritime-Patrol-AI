@@ -37,7 +37,7 @@ Write-Host "=== 서버 시작 ===" -ForegroundColor Yellow
 Write-Host "API 서버: http://127.0.0.1:8000" -ForegroundColor Cyan
 Write-Host "Map Viewer: http://127.0.0.1:8502" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "두 개의 새 터미널 창에서 각각 실행하세요:" -ForegroundColor White
-Write-Host "  1) cd D:\Git\Maritime-Patrol-AI-master && py api.py" -ForegroundColor Gray
-Write-Host "  2) cd D:\Git\Maritime-Patrol-AI-master\map-viewer && py run.py" -ForegroundColor Gray
+Write-Host "두 개의 새 터미널 창에서 각각 실행하세요 (또는 start_servers.bat 더블클릭):" -ForegroundColor White
+Write-Host "  1) 프로젝트 루트: py api.py" -ForegroundColor Gray
+Write-Host "  2) map-viewer 폴더: py run.py" -ForegroundColor Gray
 Write-Host ""

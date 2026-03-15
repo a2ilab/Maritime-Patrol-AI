@@ -47,6 +47,9 @@ ehthumbs.db
 *.png
 !assets/*.png
 
+# 학습된 모델 (재학습 시 갱신, 필요 시 커밋에서 제외 해제)
+models/
+
 # Streamlit
 .streamlit/secrets.toml
 

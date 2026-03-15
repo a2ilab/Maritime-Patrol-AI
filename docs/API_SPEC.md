@@ -1,6 +1,6 @@
 # Maritime Patrol AI - 추론 API 명세서
 
-AI 기반 해양 경비순찰 경로분석 REST API. Q-Learning으로 최적 순찰 경로를 생성하고, 순찰 필요 지역(복합영향도 기반)을 산출합니다.
+AI 기반 해양 경비순찰 경로분석 REST API. **학습 맵(그래프+가중치)** 과 요청 시간대 데이터로 순찰 필요 지역을 산출하고, **안전+단시간** 기준으로 순찰 경로를 생성합니다. (학습 맵은 당분간 랜덤 생성·저장 재사용.)
 
 ---
 
@@ -47,7 +47,7 @@ POST /inference
 | `requestId` | string | O | 요청 식별자 |
 | `filter` | object | O | 필터 조건 |
 | `options` | object | - | 출력 옵션 (기본값 있음) |
-| `strategy` | string | - | 순찰 전략: `safety`, `efficiency`, `surveillance` (기본: `safety`) |
+| `strategy` | string | - | **무시됨.** 순찰은 안전+단시간 고정. (하위 호환용 필드) |
 | `map_seed` | int | - | 맵 시드 (재현성). 미지정 시 변동 시드 사용 |
 | `polygon` | array | - | 순찰 영역 Polygon [lat, lng]. 2점 이상. 미지정 시 기본 영역 |
 | `port` | string | - | 출발 항구. `gunsan`=군산항. `null`이면 격자 (0,0) 기준 |
@@ -283,13 +283,12 @@ POST /inference
 
 ---
 
-## 순찰 전략 (strategy)
+## 추론 동작 요약
 
-| 값 | 설명 | 특징 |
-|----|------|------|
-| `safety` | 안전 우선 | 순찰 필요성 높은 구역 우선 탐색 |
-| `efficiency` | 효율 우선 | 최소 이동으로 효율적 순찰 |
-| `surveillance` | 광역 감시 | 넓은 영역 커버리지 |
+- **시간대**: `filter.startTime` ~ `endTime` 을 1시간 단위 슬롯으로 나누어 처리 (최대 4슬롯).
+- **학습 맵**: `models/patrol_learning_map.npz` 에 저장·로드. 없으면 랜덤 생성 후 저장.
+- **순찰 구역**: 각 슬롯별 순찰 필요성 격자에서 상위 구역 추출 (시간대당 최대 2개).
+- **경로**: 안전(육지·충돌 회피) + 단시간 기준. `strategy` 값은 사용하지 않음.
 
 ---
 

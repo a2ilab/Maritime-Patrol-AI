@@ -7,9 +7,10 @@ echo Map Viewer: http://127.0.0.1:8502
 echo.
 echo 두 개의 창이 열립니다. 각각 닫지 마세요.
 echo.
-start "API Server (8000)" cmd /k "cd /d D:\Git\Maritime-Patrol-AI-master && py api.py"
+set "ROOT=%~dp0"
+start "API Server (8000)" cmd /k "cd /d "%ROOT%" && python api.py"
 timeout /t 2 /nobreak >nul
-start "Map Viewer (8502)" cmd /k "cd /d D:\Git\Maritime-Patrol-AI-master\map-viewer && py run.py"
+start "Map Viewer (8502)" cmd /k "cd /d "%ROOT%map-viewer" && python run.py"
 echo.
 echo 서버가 시작되었습니다.
 echo 브라우저에서 http://127.0.0.1:8502 접속
