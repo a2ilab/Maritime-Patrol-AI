@@ -50,6 +50,10 @@ ehthumbs.db
 # 학습된 모델 (재학습 시 갱신, 필요 시 커밋에서 제외 해제)
 models/
 
+# 경비/순찰 선박 검출 알고리즘만 포함. 데이터 제외
+thirdparty_search_patrol/data/
+thirdparty_search_patrol/output/
+
 # Streamlit
 .streamlit/secrets.toml
 
