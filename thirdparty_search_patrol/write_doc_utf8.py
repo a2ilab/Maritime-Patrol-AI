@@ -84,11 +84,12 @@ python search_patrol.py --limit-files 1
    - 궤적에서 **부두 안 → 부두 밖**으로 나가는 시점(이탈 인덱스)을 찾습니다. 이탈 직전·직후 구간을 "출발 구간"으로 둡니다.
 
 5. **과도 기동 판정 (최종 후보 필터)**
-   - 각 출발 구간에서 **연속 두 포인트 간**:
-     - **회전**: COG 또는 Heading 변화량 (도). AIS 무효값(511 등)이면 위경도로부터 bearing 보정.
-     - **속도 변화**: SOG 절대 변화량 (kn).
-   - 스크립트 상단 상수: `MIN_HEADING_CHANGE_DEG`(기본 20°), `MIN_SOG_CHANGE_KN`(기본 1.2 kn). 출발 구간 내에서 **한 번이라도** 회전 ≥ 20° 또는 SOG 변화 ≥ 1.2 kn 이면 "과도 기동"으로 판정.
-   - **최종 후보**: 1차 후보 중 **"부두 이탈이 한 번이라도 있고, 그 이탈 구간에서 과도 기동이 한 번이라도 있는"** MMSI만 남깁니다.
+   - 이탈 시점을 포함해 **연속 30포인트** 구간을 잡습니다 (`MANEUVER_POINT_WINDOW`). 궤적 전체가 30포인트 미만이면 해당 이탈에 대해 과도 기동 판정을 하지 않습니다.
+   - 그 구간에서 **인접 포인트쌍**마다 COG/Heading 변화량(절댓값, 도)을 더합니다. AIS 무효값(511 등)이면 위경도 bearing으로 보정 (`get_heading_at`).
+   - **회전 조건**: 위 합계 ≥ `MANEUVER_HEADING_SUM_MIN_DEG`(기본 180°).
+   - **속도 조건**: 구간 내 **min(SOG) ≤ `MANEUVER_SOG_LOW_MAX_KN`(4 kn)** 이고 **max(SOG) ≥ `MANEUVER_SOG_HIGH_MIN_KN`(8 kn)** (저속 구간과 가속 구간이 같은 창 안에 함께 있음).
+   - **과도 기동**: 회전 조건 **그리고** 속도 조건을 **동시에** 만족할 때.
+   - **최종 후보**: 1차 후보 중 **부두 이탈이 한 번이라도 있고, 그 이탈에 대해 위 과도 기동이 성립하는** MMSI만 남깁니다.
 
 6. **참고 지표 (출력용)**
    - **정박 비율**: 부두 인근(PIER_RADIUS_M 이내) 이면서 SOG < 1 kn 인 포인트 수·비율.
@@ -134,7 +135,7 @@ python search_patrol.py --limit-files 1
 
 ## 7. 참고
 
-- 부두 중심·반경: 스크립트 상단 `PIER_LAT`, `PIER_LNG`, `PIER_RADIUS_M`. 과도 기동 기준: `MIN_HEADING_CHANGE_DEG`, `MIN_SOG_CHANGE_KN`, `DEPARTURE_WINDOW_BEFORE`, `DEPARTURE_WINDOW_AFTER`.
+- 부두 중심·반경: 스크립트 상단 `PIER_LAT`, `PIER_LNG`, `PIER_RADIUS_M`. 과도 기동 기준: `MANEUVER_POINT_WINDOW`, `MANEUVER_HEADING_SUM_MIN_DEG`, `MANEUVER_SOG_LOW_MAX_KN`, `MANEUVER_SOG_HIGH_MIN_KN`.
 - **해경은 AIS를 끄고 다니는 경우가 많아** 부두 근처 AIS 기록이 적고, **후보 0명이 나오는 것도 흔한 결과**입니다. 후보 0명일 때 `[진단]` 메시지로 "부두에서 가장 가까운 위치"만 참고용으로 확인할 수 있습니다.
 - 최종 후보는 "부두에서 출발 + 출발 시 과도한 회전/속도 변화"만 통과하므로, 단순 통과선은 걸리지 않습니다. 다만 어선·민원선 등이 부두에서 기동하며 출발할 수 있으므로, `departure_count`·`round_trip_detected`·선종코드 등을 함께 보며 순찰/경비선을 가려 쓰는 것이 좋습니다.
 """

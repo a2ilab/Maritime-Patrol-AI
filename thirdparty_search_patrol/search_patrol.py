@@ -8,8 +8,8 @@
 - 1차 스캔: 부두 반경 안에 한 번이라도 들어온 MMSI 수집 (후보 풀).
 - 2차 스캔: 후보 궤적 수집 후,
   - **출발 구간**: 부두 안 → 부두 밖으로 나가는 시점(들) 탐지.
-  - **출발 시 과도 기동**: 해당 구간에서 과도한 회전(COG/Heading 변화) 또는 과도한 속도(SOG) 변화가 있으면
-    "부두에서 출발한 선박"으로 판단. 이 조건을 만족하는 MMSI만 최종 후보로 남김.
+  - **출발 시 과도 기동**: 이탈 시점을 포함한 연속 30포인트 구간에서 (1) 인접 포인트쌍 방향 변화(절댓값)의 합 ≥ 180°
+    이고 (2) 구간 내 SOG가 4 kn 이하인 포인트와 8 kn 이상인 포인트가 각각 존재하면 "부두에서 출발한 선박"으로 판단.
 - 정박 비율·왕복 여부는 참고용으로 유지.
 """
 
@@ -19,6 +19,7 @@ import csv
 import math
 import re
 import xml.etree.ElementTree as ET
+import zlib
 from collections import defaultdict
 from pathlib import Path
 
@@ -28,13 +29,13 @@ DYNAMIC_FILE_PATTERN = re.compile(r"^Dynamic_(\d{8})\.csv$")
 # 군산해양경찰서 경비함정전용부두 (대략 중심). 반경을 줄이면 해경정·순찰선 위주로 걸림.
 PIER_LAT = 35.974577
 PIER_LNG = 126.566007
-PIER_RADIUS_M = 500.0  # 부두 실제 정박 구역에 맞춤 (필요 시 150~250 조정)
+PIER_RADIUS_M = 250  # 부두 실제 정박 구역에 맞춤 (필요 시 150~250 조정)
 
-# 출발 시 과도 기동 판정 (부두 이탈 직전·직후 구간)
-DEPARTURE_WINDOW_BEFORE = 2   # 이탈 시점 이전 포인트 수
-DEPARTURE_WINDOW_AFTER = 6    # 이탈 시점 이후 포인트 수
-MIN_HEADING_CHANGE_DEG = 20.0   # 연속 두 포인트 간 최소 회전(도), 이하면 회전 미탐지
-MIN_SOG_CHANGE_KN = 1.2        # 연속 두 포인트 간 최소 속도 변화(kn), 이하면 속도변화 미탐지
+# 출발 시 과도 기동 판정: 이탈 인덱스를 포함하는 연속 MANEUVER_POINT_WINDOW 포인트 구간
+MANEUVER_POINT_WINDOW = 30
+MANEUVER_HEADING_SUM_MIN_DEG = 180.0  # 구간 내 인접 쌍 |Δ방향| 합(도)
+MANEUVER_SOG_LOW_MAX_KN = 4.0  # 구간 내 min(SOG) ≤ 이 값 (저속/대기)
+MANEUVER_SOG_HIGH_MIN_KN = 8.0  # 구간 내 max(SOG) ≥ 이 값 (가속 출항)
 # AIS 무효값
 COG_HEADING_INVALID = 511
 COG_HEADING_INVALID_360 = 360
@@ -56,16 +57,46 @@ def is_near_pier(lat: float, lon: float, radius_m: float = PIER_RADIUS_M) -> boo
 
 
 def _parse_angle(s: str) -> float | None:
-    """COG/Heading 파싱. 511, 360, 빈값은 None."""
+    """COG/Heading 파싱. 511, 360, 빈값은 None. 일부 원본은 도×10(3522→352.2°)."""
     if not s or not s.strip():
         return None
     try:
         v = float(s.strip())
-        if v == COG_HEADING_INVALID or v == COG_HEADING_INVALID_360:
+        if v in (COG_HEADING_INVALID, COG_HEADING_INVALID_360):
+            return None
+        while v > 360.0:
+            v = v / 10.0
+        if v < 0 or v >= 360.0:
             return None
         return v
     except ValueError:
         return None
+
+
+def parse_mmsi_cell(cell: str) -> int | None:
+    """MMSI 정수 또는 익명화 ID 문자열 → 궤적 그룹용 양의 정수."""
+    s = cell.strip()
+    if not s:
+        return None
+    try:
+        v = int(s)
+        if v > 0:
+            return v
+    except ValueError:
+        pass
+    h = zlib.crc32(s.encode("utf-8")) & 0x7FFFFFFF
+    return h if h > 0 else 1
+
+
+def normalize_lat_lon_deg(lat: float, lon: float) -> tuple[float, float] | None:
+    """도 단위 위경도. 원본이 AIS 1/600000° 정수(예: 20529177)이면 변환."""
+    if abs(lat) <= 90.0 and abs(lon) <= 180.0:
+        return lat, lon
+    lat2 = lat / 600000.0
+    lon2 = lon / 600000.0
+    if abs(lat2) <= 90.0 and abs(lon2) <= 180.0:
+        return lat2, lon2
+    return None
 
 
 def parse_dynamic_row(row: list[str]) -> tuple[int, str, float, float, float, float | None, float | None] | None:
@@ -73,12 +104,16 @@ def parse_dynamic_row(row: list[str]) -> tuple[int, str, float, float, float, fl
     if len(row) < 6:
         return None
     try:
-        mmsi = int(row[0].strip())
-        if mmsi <= 0:
+        mmsi = parse_mmsi_cell(row[0])
+        if mmsi is None:
             return None
         dt_str = row[1].strip()
         lat = float(row[2].strip())
         lon = float(row[3].strip())
+        coords = normalize_lat_lon_deg(lat, lon)
+        if coords is None:
+            return None
+        lat, lon = coords
         sog = float(row[4].strip()) if row[4].strip() else 0.0
         cog = _parse_angle(row[5]) if len(row) > 5 else None
         heading = _parse_angle(row[6]) if len(row) > 6 else None
@@ -169,35 +204,54 @@ def find_departure_indices(points: list[PointT]) -> list[int]:
     return out
 
 
+def _maneuver_window_indices(n: int, departure_idx: int, window_size: int = MANEUVER_POINT_WINDOW) -> tuple[int, int] | None:
+    """이탈 인덱스를 포함하는 길이 window_size의 연속 구간 [start, end). 부족하면 None."""
+    if n < window_size:
+        return None
+    before = (window_size - 1) // 2
+    start = max(0, departure_idx - before)
+    end = start + window_size
+    if end > n:
+        end = n
+        start = end - window_size
+    if start < 0 or departure_idx < start or departure_idx >= end:
+        return None
+    return start, end
+
+
 def detect_excessive_maneuver_at_departure(
     points: list[PointT],
     departure_idx: int,
-    window_before: int = DEPARTURE_WINDOW_BEFORE,
-    window_after: int = DEPARTURE_WINDOW_AFTER,
+    window_size: int = MANEUVER_POINT_WINDOW,
 ) -> tuple[float, float, bool]:
-    """출발(이탈) 구간 전후에서 최대 회전(도)·최대 SOG 변화(kn) 계산. 과도 기동 여부 반환."""
-    start = max(0, departure_idx - window_before)
-    end = min(len(points), departure_idx + window_after)
-    max_heading_deg = 0.0
-    max_sog_kn = 0.0
+    """이탈을 포함한 window_size 포인트 구간에서 방향 변화 합(도)·SOG 범위(kn) 기반 과도 기동 판정.
+
+    Returns:
+        (heading_turn_sum_deg, sog_span_kn, excessive). sog_span = max(SOG)-min(SOG) in window.
+    """
+    n = len(points)
+    win = _maneuver_window_indices(n, departure_idx, window_size)
+    if win is None:
+        return 0.0, 0.0, False
+    start, end = win
+    heading_sum = 0.0
     for i in range(start + 1, end):
         h1 = get_heading_at(points, i - 1)
         h2 = get_heading_at(points, i)
         if h1 is not None and h2 is not None:
-            d = abs(normalize_angle_deg(h2 - h1))
-            if d > max_heading_deg:
-                max_heading_deg = d
-        d_sog = abs(points[i][3] - points[i - 1][3])
-        if d_sog > max_sog_kn:
-            max_sog_kn = d_sog
-    excessive = (
-        max_heading_deg >= MIN_HEADING_CHANGE_DEG or max_sog_kn >= MIN_SOG_CHANGE_KN
-    )
-    return max_heading_deg, max_sog_kn, excessive
+            heading_sum += abs(normalize_angle_deg(h2 - h1))
+    sogs = [points[i][3] for i in range(start, end)]
+    min_sog = min(sogs)
+    max_sog = max(sogs)
+    sog_span = max_sog - min_sog
+    heading_ok = heading_sum >= MANEUVER_HEADING_SUM_MIN_DEG
+    sog_ok = min_sog <= MANEUVER_SOG_LOW_MAX_KN and max_sog >= MANEUVER_SOG_HIGH_MIN_KN
+    excessive = heading_ok and sog_ok
+    return heading_sum, sog_span, excessive
 
 
 def has_departure_with_excessive_maneuver(points: list[PointT]) -> bool:
-    """부두 이탈 구간이 하나라도 있고, 그 구간에서 과도한 회전 또는 속도 변화가 있으면 True."""
+    """부두 이탈이 있고, 해당 이탈에 대해 30포인트 구간에서 회전 합·SOG 저→고 조건을 동시에 만족하면 True."""
     for idx in find_departure_indices(points):
         _, _, exc = detect_excessive_maneuver_at_departure(points, idx)
         if exc:
@@ -430,13 +484,13 @@ def export_patrol_tracks_kml(
     static_info: dict[int, dict],
     out_path: Path,
 ) -> None:
-    """최종 후보 궤적을 KML로 저장. 선박별 Placemark + LineString (lon,lat,0)."""
+    """최종 후보 궤적을 단일 KML 파일에 저장. MMSI별 Folder + Placemark(LineString)."""
     ns = {"gx": "http://www.google.com/kml/ext/2.2", "kml": "http://www.opengis.net/kml/2.2"}
     ET.register_namespace("gx", ns["gx"])
     root = ET.Element("kml", attrib={"xmlns": ns["kml"]})
     doc = ET.SubElement(root, "Document")
     ET.SubElement(doc, "name").text = "순찰/경비선 후보 궤적"
-    ET.SubElement(doc, "description").text = "군산해양경찰서 경비함정전용부두 출발 후보 선박 궤적"
+    ET.SubElement(doc, "description").text = "군산해양경찰서 경비함정전용부두 출발 후보 선박 궤적 (MMSI별 폴더 구분)"
 
     for mmsi in sorted(candidates.keys()):
         points = tracks.get(mmsi, [])
@@ -444,6 +498,8 @@ def export_patrol_tracks_kml(
             continue
         s = static_info.get(mmsi, {})
         name = s.get("선박명", "") or str(mmsi)
+        folder = ET.SubElement(doc, "Folder")
+        ET.SubElement(folder, "name").text = _kml_escape("MMSI {} — {}".format(mmsi, name))
         desc_parts = [
             "MMSI: {}".format(mmsi),
             "선박명: {}".format(name),
@@ -452,8 +508,8 @@ def export_patrol_tracks_kml(
         ]
         description = "<br />".join(_kml_escape(p) for p in desc_parts)
 
-        pm = ET.SubElement(doc, "Placemark")
-        ET.SubElement(pm, "name").text = _kml_escape("{} (MMSI {})".format(name, mmsi))
+        pm = ET.SubElement(folder, "Placemark")
+        ET.SubElement(pm, "name").text = _kml_escape("궤적 — {} (MMSI {})".format(name, mmsi))
         ET.SubElement(pm, "description").text = description
         coords = " ".join("{},{},0".format(p[2], p[1]) for p in points)  # lon, lat, alt=0
         ls = ET.SubElement(pm, "LineString")
@@ -505,12 +561,14 @@ def load_static_for_mmsi(data_dir: Path, mmsi_set: set[int]) -> dict[int, dict]:
 
 def main() -> None:
     import sys
-    # 입력: data/AIS/ (Dynamic_*.csv, Static.csv) | 출력: data/AIS/search_patrol/
+    # 입력: thirdparty_search_patrol/data/AIS/ | 출력: thirdparty_search_patrol/output/
     script_dir = Path(__file__).resolve().parent
-    data_dir = script_dir.parent
+    data_dir = script_dir / "data" / "AIS"
+    output_dir = script_dir / "output"
     if not data_dir.exists():
         print("AIS 데이터 폴더가 없습니다:", data_dir)
         return
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     limit_files: int | None = None
     if "--limit-files" in sys.argv:
@@ -522,15 +580,17 @@ def main() -> None:
 
     print("군산해양경찰서 경비함정전용부두 순찰/경비선 탐지")
     print("부두 중심:", PIER_LAT, PIER_LNG, "반경", PIER_RADIUS_M, "m")
+    print("데이터 경로:", data_dir)
+    print("출력 경로:", output_dir)
     all_dynamic = get_dynamic_csv_files(data_dir)
     print("Dynamic 파일 규칙: Dynamic_(DATE).csv, DATE=YYYYMMDD")
     print("대상 파일 수:", len(all_dynamic))
     if not all_dynamic:
-        print("data/AIS/ 에 Dynamic_YYYYMMDD.csv 형식 파일이 없습니다.")
+        print(str(data_dir), "에 Dynamic_YYYYMMDD.csv 형식 파일이 없습니다.")
         return
     print("Dynamic CSV 스캔 중...")
 
-    candidates, tracks = find_patrol_candidates(data_dir, limit_files=limit_files, output_dir=script_dir)
+    candidates, tracks = find_patrol_candidates(data_dir, limit_files=limit_files, output_dir=output_dir)
     if not candidates:
         print("조건을 만족하는 후보가 없습니다. (부두 출발 + 출발 시 과도한 회전/속도 변화)")
         return
@@ -538,8 +598,8 @@ def main() -> None:
     mmsi_set = set(candidates.keys())
     static_info = load_static_for_mmsi(data_dir, mmsi_set)
 
-    # 결과: data/AIS/search_patrol/patrol_candidates.csv
-    out_path = script_dir / "patrol_candidates.csv"
+    # 결과: output/patrol_candidates.csv
+    out_path = output_dir / "patrol_candidates.csv"
     with open(out_path, "w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f)
         writer.writerow([
@@ -573,11 +633,11 @@ def main() -> None:
             ])
 
     # KML 내보내기 (Google Earth 등에서 궤적 확인)
-    kml_path = script_dir / "patrol_tracks.kml"
+    kml_path = output_dir / "patrol_tracks.kml"
     export_patrol_tracks_kml(candidates, tracks, static_info, kml_path)
     print("후보 MMSI 수:", len(candidates))
     print("결과 저장:", out_path)
-    print("KML 저장:", kml_path)
+    print("KML:", kml_path)
     for mmsi in sorted(candidates.keys())[:10]:
         c = candidates[mmsi]
         s = static_info.get(mmsi, {})
