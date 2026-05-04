@@ -111,7 +111,7 @@
                     <label><input type="checkbox" id="cb_zones" name="include_accident_zone" value="1" {{ 'checked' if include_accident_zone else '' }}> 순찰 지역 표시</label>
                 </div>
                 <div class="form-group">
-                    <label><input type="checkbox" id="cb_outline" name="include_grid" value="1" {{ 'checked' if include_grid else '' }}> 영역 외곽선 표시</label>
+                    <label><input type="checkbox" id="cb_outline" name="include_grid" value="1" {{ 'checked' if include_grid else '' }}> 책임구역 표시</label>
                 </div>
                 <button type="submit" class="btn">경로 생성</button>
             </form>
@@ -158,14 +158,14 @@
                 var simulationLayer = L.layerGroup();
 
                 var bounds = [];
-                if (mapData.grid && mapData.grid.bbox) {
-                    var b = mapData.grid.bbox;
-                    var latMin = b.latMin || b.lat_min, latMax = b.latMax || b.lat_max;
-                    var lngMin = b.lngMin || b.lng_min, lngMax = b.lngMax || b.lng_max;
-                    var poly = [[latMax, lngMin], [latMax, lngMax], [latMin, lngMax], [latMin, lngMin]];
-                    var outlinePoly = L.polygon(poly, { color: '#2b6cb0', fillOpacity: 0, weight: 2, className: 'outline-no-hit' });
-                    outlinePoly.addTo(outlineLayer);
-                    bounds.push([latMin, lngMin], [latMax, lngMax]);
+                var jurisdictionPoly = {{ jurisdiction_polygon | safe }};
+                if (jurisdictionPoly && jurisdictionPoly.length > 2) {
+                    var jPoly = L.polygon(jurisdictionPoly, {
+                        color: '#2b6cb0', weight: 2, fillColor: '#bee3f8',
+                        fillOpacity: 0.08, dashArray: '6 4', className: 'outline-no-hit'
+                    });
+                    jPoly.addTo(outlineLayer);
+                    bounds = bounds.concat(jurisdictionPoly);
                 }
 
                 var pathForSimulation = null;
@@ -196,7 +196,7 @@
                         bounds.push([a.center.lat, a.center.lng]);
                         var necPct = (nec * 100).toFixed(0);
                         var timeSlotText = (a.timeSlotIndex !== undefined && a.timeSlotIndex !== null) ? a.timeSlotIndex + '시간대' : '';
-                        var shortReason = (a.type || a.label || '순찰필요').toString().substring(0, 10);
+                        var shortReason = (a.type || a.label || '추천지점').toString().substring(0, 10);
                         var alwaysLabel = '<div class="poi-always-label">' + (timeSlotText ? timeSlotText + '<br>' : '') + shortReason + '</div>';
 
                         var popupHtml = '<div class="poi-popup">';
@@ -212,7 +212,7 @@
                             popupHtml += '</table>';
                         }
                         popupHtml += '<table style="margin-top:8px;font-size:12px;border-collapse:collapse;width:100%;">';
-                        popupHtml += '<tr><td style="padding:2px 8px 2px 0;color:#4a5568;">라벨</td><td style="padding:2px 0;">' + (a.label || '순찰필요') + '</td></tr>';
+                        popupHtml += '<tr><td style="padding:2px 8px 2px 0;color:#4a5568;">라벨</td><td style="padding:2px 0;">' + (a.label || '추천지점') + '</td></tr>';
                         if (a.id) popupHtml += '<tr><td style="padding:2px 8px 2px 0;color:#4a5568;">ID</td><td style="padding:2px 0;">' + a.id + '</td></tr>';
                         if (a.type) popupHtml += '<tr><td style="padding:2px 8px 2px 0;color:#4a5568;">유형</td><td style="padding:2px 0;"><span style="background:#feb2b2;padding:1px 4px;border-radius:3px;">' + a.type + '</span></td></tr>';
                         popupHtml += '<tr><td style="padding:2px 8px 2px 0;color:#4a5568;">반경</td><td style="padding:2px 0;">' + Math.round(a.radius || 0) + ' m</td></tr>';
@@ -247,10 +247,7 @@
                     });
                 }
 
-                if (mapData.grid && mapData.grid.bbox) {
-                    var b = mapData.grid.bbox;
-                    bounds.push([b.latMin || b.lat_min, b.lngMin || b.lng_min], [b.latMax || b.lat_max, b.lngMax || b.lng_max]);
-                }
+                
 
                 function updateLayers() {
                     if (document.getElementById('cb_route').checked) map.addLayer(routeLayer);

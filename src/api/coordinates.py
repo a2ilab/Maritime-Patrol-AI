@@ -116,6 +116,37 @@ def latlng_to_grid(lat: float, lng: float, spec: GridSpec) -> tuple[int, int]:
     return (row, col)
 
 
+def _point_in_polygon(lat: float, lng: float, polygon: list[dict]) -> bool:
+    """Ray-casting point-in-polygon test. polygon: [{lat, lng}, ...]."""
+    n = len(polygon)
+    inside = False
+    j = n - 1
+    for i in range(n):
+        yi, xi = polygon[i]["lat"], polygon[i]["lng"]
+        yj, xj = polygon[j]["lat"], polygon[j]["lng"]
+        if ((yi > lat) != (yj > lat)) and (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def create_polygon_mask(
+    spec: GridSpec,
+    polygon: list[dict],
+) -> list[list[bool]]:
+    """격자 셀 중심이 polygon 내부에 있는지 여부. mask[row][col] = True면 내부."""
+    box = spec.bbox
+    mask: list[list[bool]] = []
+    for row in range(spec.rows):
+        row_mask: list[bool] = []
+        lat = box.lat_max - (row + 0.5) * (box.lat_max - box.lat_min) / spec.rows
+        for col in range(spec.cols):
+            lng = box.lng_max - (col + 0.5) * (box.lng_max - box.lng_min) / spec.cols
+            row_mask.append(_point_in_polygon(lat, lng, polygon))
+        mask.append(row_mask)
+    return mask
+
+
 def path_to_latlng_path(path: list[Position], spec: GridSpec) -> list[dict[str, float]]:
     """격자 경로 → lat/lng 리스트."""
     return [

@@ -10,11 +10,14 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from api_client import call_inference
+from api_client import call_inference, get_default_polygon
 from config import HOST, PORT
 
 app = FastAPI(title="Maritime Patrol Map Viewer")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+def jurisdiction_polygon_latlngs() -> list[list[float]]:
+    return [[float(p["lat"]), float(p["lng"])] for p in get_default_polygon()]
 
 
 @app.middleware("http")
@@ -81,12 +84,13 @@ async def index(request: Request) -> HTMLResponse:
         context={
             "port": "gunsan",
             "start_time": "2026-03-01T00:00",
-            "end_time": "2026-03-09T23:59",
+            "end_time": "2026-03-01T03:59",
             "include_route": True,
             "include_accident_zone": True,
             "include_labels": True,
             "include_grid": True,
             "map_data": json.dumps(_last_map_data),
+            "jurisdiction_polygon": json.dumps(jurisdiction_polygon_latlngs()),
             "error": None,
             "summary": None,
             "request_id": None,
@@ -162,6 +166,7 @@ async def generate(
         ctx["map_data"] = json.dumps(_last_map_data)
         ctx["error"] = str(e)
 
+    ctx["jurisdiction_polygon"] = json.dumps(jurisdiction_polygon_latlngs())
     return templates.TemplateResponse(request=request, name="index.html", context=ctx)
 
 

@@ -12,6 +12,7 @@ from numpy.typing import NDArray
 from src.api.coordinates import (
     BoundingBox,
     create_grid_from_bbox,
+    create_polygon_mask,
     grid_to_latlng,
     latlng_to_grid,
     polygon_to_bbox,
@@ -37,9 +38,10 @@ from src.core.learning_map import (
     InferenceModel,
     generate_random_data,
 )
+from src.core.path_planner import plan_full_route
 from src.core.random_gen import RandomGenerator
 
-# 고위험군: 0.75 이상
+# 추천지점 선별 임계값: 0.75 이상
 ACCIDENT_INFLUENCE_THRESHOLD: float = 0.75
 
 # WGS84: 1도 위도 ≈ 111.32km, 1도 경도 ≈ 111.32 * cos(lat) km
@@ -126,8 +128,9 @@ def _zones_and_waypoints_from_grid(
     dynamic_map: NDArray[np.float64],
     weather_map: NDArray[np.float64],
     include_zones: bool,
+    slot_seed: int = 0,
 ) -> tuple[list[PatrolZone], list[tuple[int, int]]]:
-    """순찰 필요성 격자에서 0.75 이상 구역·라벨 추출 및 상위 2개 (row,col) 웨이포인트."""
+    """순찰 필요성 격자에서 threshold 이상 후보군 → 랜덤 2개 추천지점 선별."""
     zones: list[PatrolZone] = []
     r_min = float(np.min(influence_map))
     r_max = float(np.max(influence_map))
@@ -142,9 +145,15 @@ def _zones_and_waypoints_from_grid(
             if nec >= ACCIDENT_INFLUENCE_THRESHOLD:
                 candidates.append((row, col, nec))
 
-    # 시간대당 순찰 필요 지점은 영향도 상위 2개로 제한
-    sorted_candidates = sorted(candidates, key=lambda x: -x[2])[:2]
-    for row, col, nec in sorted_candidates:
+    # 후보군에서 랜덤 2개 선택 (시드 기반으로 재현성 유지)
+    rng = np.random.default_rng(slot_seed)
+    if len(candidates) > 2:
+        indices = rng.choice(len(candidates), size=2, replace=False)
+        selected = [candidates[i] for i in indices]
+    else:
+        selected = list(candidates)
+
+    for row, col, nec in selected:
         s = float(static_map[row, col])
         d = float(dynamic_map[row, col])
         w = float(weather_map[row, col])
@@ -152,8 +161,8 @@ def _zones_and_waypoints_from_grid(
         lng = box.lng_max - (col + 0.5) * (box.lng_max - box.lng_min) / spec.cols
         lat, lng = round(lat, 5), round(lng, 5)
         zid = f"Z{len(zones)+1:03d}"
-        label_text = "순찰필요 고도" if nec >= 0.9 else "순찰필요"
-        acc_type = "고위험" if nec >= 0.75 else "위험"
+        label_text = "추천지점 (최우선)" if nec >= 0.9 else "추천지점"
+        acc_type = "추천지점"
         if include_zones:
             radius_m = _cell_radius_m(spec, nec)
             zones.append(
@@ -171,9 +180,7 @@ def _zones_and_waypoints_from_grid(
                 )
             )
 
-    # 영향도 상위 2개 (row, col) → 웨이포인트 후보
-    sorted_poi = sorted(candidates, key=lambda x: -x[2])
-    waypoint_rc = [(r, c) for r, c, _ in sorted_poi[:2]]
+    waypoint_rc = [(r, c) for r, c, _ in selected]
     if len(waypoint_rc) < 2 and waypoint_rc:
         waypoint_rc.append(waypoint_rc[0])
     if not waypoint_rc:
@@ -194,6 +201,13 @@ def run_inference(req: InferenceRequest) -> InferenceResponse:
         bbox = BoundingBox.default()
 
     spec = create_grid_from_bbox(bbox)
+
+    # Polygon 마스크: bbox 안이지만 polygon 바깥인 셀은 영향도 0 처리
+    polygon_points = [{"lat": p.lat, "lng": p.lng} for p in req.polygon] if req.polygon and len(req.polygon) >= 3 else None
+    poly_mask: np.ndarray | None = None
+    if polygon_points:
+        mask_list = create_polygon_mask(spec, polygon_points)
+        poly_mask = np.array(mask_list, dtype=bool)
 
     # 순찰 시작 위치: start_position > port > 없음
     start_row_col: tuple[int, int] | None = None
@@ -245,7 +259,10 @@ def run_inference(req: InferenceRequest) -> InferenceResponse:
         model.save()
 
     waypoints_raw: list[dict[str, float]] = []
+    waypoints_rc: list[tuple[int, int]] = []
+    waypoint_slot_idx: list[int] = []
     all_patrol_zones: list[PatrolZone] = []
+    slot_influence_maps: list[NDArray[np.float64]] = []
     first_influence: NDArray[np.float64] | None = None
     first_static: NDArray[np.float64] | None = None
     first_dynamic: NDArray[np.float64] | None = None
@@ -253,11 +270,18 @@ def run_inference(req: InferenceRequest) -> InferenceResponse:
 
     for i in range(num_slots):
         slot_seed = base_seed + (i + 1) * 9999
-        # 해당 시간대 랜덤 데이터 생성 → 그래프 치환 → 가중치 적용 → 순찰 필요성 격자
         data_grid = generate_random_data(
             spec.rows, spec.cols, model.indicators, slot_seed
         )
         influence_map, static_map, dynamic_map, weather_map = model.apply(data_grid)
+
+        if poly_mask is not None:
+            influence_map[~poly_mask] = 0.0
+            static_map[~poly_mask] = 0.0
+            dynamic_map[~poly_mask] = 0.0
+            weather_map[~poly_mask] = 0.0
+
+        slot_influence_maps.append(influence_map.copy())
 
         if first_influence is None:
             first_influence = influence_map
@@ -268,6 +292,7 @@ def run_inference(req: InferenceRequest) -> InferenceResponse:
         zones_i, waypoint_rc = _zones_and_waypoints_from_grid(
             spec, influence_map, static_map, dynamic_map, weather_map,
             req.options.includeAccidentZone,
+            slot_seed=slot_seed,
         )
         for z in zones_i:
             all_patrol_zones.append(z.model_copy(update={"timeSlotIndex": i + 1}))
@@ -277,17 +302,37 @@ def run_inference(req: InferenceRequest) -> InferenceResponse:
             wp1 = grid_to_latlng(waypoint_rc[1][0], waypoint_rc[1][1], spec)
             waypoints_raw.append({"lat": float(wp0[0]), "lng": float(wp0[1])})
             waypoints_raw.append({"lat": float(wp1[0]), "lng": float(wp1[1])})
+            waypoints_rc.extend([waypoint_rc[0], waypoint_rc[1]])
+            waypoint_slot_idx.extend([i, i])
         elif len(waypoint_rc) == 1:
             wp0 = grid_to_latlng(waypoint_rc[0][0], waypoint_rc[0][1], spec)
             waypoints_raw.append({"lat": float(wp0[0]), "lng": float(wp0[1])})
             waypoints_raw.append({"lat": float(wp0[0]), "lng": float(wp0[1])})
+            waypoints_rc.extend([waypoint_rc[0], waypoint_rc[0]])
+            waypoint_slot_idx.extend([i, i])
         else:
+            cr, cc = spec.rows // 2, spec.cols // 2
             waypoints_raw.append(fallback_center.copy())
             waypoints_raw.append(fallback_center.copy())
+            waypoints_rc.extend([(cr, cc), (cr, cc)])
+            waypoint_slot_idx.extend([i, i])
 
     end_dt = start_dt + timedelta(hours=num_slots)
     start_lat, start_lng = grid_to_latlng(start_row_col[0], start_row_col[1], spec)
     end_lat, end_lng = grid_to_latlng(end_row_col[0], end_row_col[1], spec)
+
+    # --- Q-Learning 기반 경로 계획 ---
+    ordered_wp = [start_row_col] + waypoints_rc + [end_row_col]
+    wp_slots = [0] + waypoint_slot_idx + [num_slots - 1]
+
+    ql_path_rc = plan_full_route(
+        influence_maps=slot_influence_maps,
+        ordered_waypoints=ordered_wp,
+        waypoint_slot_indices=wp_slots,
+        poly_mask=poly_mask,
+    )
+
+    ql_path_latlng = [grid_to_latlng(r, c, spec) for r, c in ql_path_rc]
 
     time_slots: list[TimeSlot] = []
     route_schedule: list[RoutePointWithTime] = []
@@ -323,20 +368,28 @@ def run_inference(req: InferenceRequest) -> InferenceResponse:
 
     start_time_iso = start_dt.isoformat().replace("+00:00", "Z")
     end_time_iso = end_dt.isoformat().replace("+00:00", "Z")
-    full_route_schedule: list[RoutePointWithTime] = [
-        RoutePointWithTime(lat=float(start_lat), lng=float(start_lng), scheduledTime=start_time_iso),
-    ]
-    full_route_schedule.extend(route_schedule)
-    full_route_schedule.append(
-        RoutePointWithTime(lat=float(end_lat), lng=float(end_lng), scheduledTime=end_time_iso),
-    )
+
+    # Q-Learning 경로를 시간 균등 배분하여 RoutePointWithTime 생성
+    n_points = len(ql_path_latlng)
+    total_seconds = num_slots * 3600.0
+    full_route_schedule: list[RoutePointWithTime] = []
+    for idx, (lat, lng) in enumerate(ql_path_latlng):
+        frac = idx / max(1, n_points - 1)
+        point_dt = start_dt + timedelta(seconds=frac * total_seconds)
+        full_route_schedule.append(
+            RoutePointWithTime(
+                lat=float(lat),
+                lng=float(lng),
+                scheduledTime=point_dt.isoformat().replace("+00:00", "Z"),
+            )
+        )
 
     routes: list[Route] = []
     if req.options.includeRoute and full_route_schedule:
         routes.append(
             Route(
                 routeId="R001",
-                name="AI 순찰 경로 (시간순)",
+                name="AI 순찰 경로 (Q-Learning)",
                 path=[LatLngPoint(lat=p.lat, lng=p.lng) for p in full_route_schedule],
             )
         )
@@ -381,6 +434,7 @@ def run_inference(req: InferenceRequest) -> InferenceResponse:
                     end=LatLngPoint(lat=lat_max, lng=round(lng, 5)),
                 )
             )
+        mask_flat = poly_mask.flatten().tolist() if poly_mask is not None else None
         influence_flat = first_influence.flatten().tolist()
         static_flat = first_static.flatten().tolist()
         dynamic_flat = first_dynamic.flatten().tolist()
@@ -388,12 +442,12 @@ def run_inference(req: InferenceRequest) -> InferenceResponse:
         r_min, r_max = float(np.min(first_influence)), float(np.max(first_influence))
         r_span = max(r_max - r_min, 1e-6)
         influence_flat = [
-            round(min(1.0, max(0.0, (float(x) - r_min) / r_span)), 4)
-            for x in influence_flat
+            round(min(1.0, max(0.0, (float(x) - r_min) / r_span)), 4) if (mask_flat is None or mask_flat[i]) else 0.0
+            for i, x in enumerate(influence_flat)
         ]
-        static_flat = [round(float(x), 4) for x in static_flat]
-        dynamic_flat = [round(float(x), 4) for x in dynamic_flat]
-        env_flat = [round(float(x), 4) for x in env_flat]
+        static_flat = [round(float(x), 4) if (mask_flat is None or mask_flat[i]) else 0.0 for i, x in enumerate(static_flat)]
+        dynamic_flat = [round(float(x), 4) if (mask_flat is None or mask_flat[i]) else 0.0 for i, x in enumerate(dynamic_flat)]
+        env_flat = [round(float(x), 4) if (mask_flat is None or mask_flat[i]) else 0.0 for i, x in enumerate(env_flat)]
 
         grid_info = GridInfo(
             bbox=GridBbox(
