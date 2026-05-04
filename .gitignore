@@ -36,6 +36,7 @@ ENV/
 *.tmp
 *.temp
 *.bak
+*.zip
 
 # OS generated files
 .DS_Store
