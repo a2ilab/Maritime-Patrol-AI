@@ -44,6 +44,10 @@ from src.core.random_gen import RandomGenerator
 # 추천지점 선별 임계값: 0.75 이상
 ACCIDENT_INFLUENCE_THRESHOLD: float = 0.75
 
+# 두 번째 추천: 첫 번째와 직선거리 이 구간(미터). 불충족 시 후보 중 다른 셀에서 랜덤.
+MIN_RECOMMENDATION_PAIR_DISTANCE_M: float = 1000.0
+MAX_RECOMMENDATION_PAIR_DISTANCE_M: float = 3000.0
+
 # WGS84: 1도 위도 ≈ 111.32km, 1도 경도 ≈ 111.32 * cos(lat) km
 METERS_PER_DEG_LAT: float = 111_320.0
 
@@ -121,6 +125,16 @@ def _compute_seed(request_id: str, map_seed: int | None) -> int:
     return rng.get_seed()
 
 
+def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """두 위경도 점 사이 대권 거리 (미터)."""
+    r_earth = 6_371_000.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dlat = math.radians(lat2 - lat1)
+    dlng = math.radians(lng2 - lng1)
+    a = math.sin(dlat / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlng / 2) ** 2
+    return 2 * r_earth * math.asin(math.sqrt(min(1.0, max(0.0, a))))
+
+
 def _zones_and_waypoints_from_grid(
     spec: GridSpec,
     influence_map: NDArray[np.float64],
@@ -130,7 +144,12 @@ def _zones_and_waypoints_from_grid(
     include_zones: bool,
     slot_seed: int = 0,
 ) -> tuple[list[PatrolZone], list[tuple[int, int]]]:
-    """순찰 필요성 격자에서 threshold 이상 후보군 → 랜덤 2개 추천지점 선별."""
+    """순찰 필요성 격자에서 threshold 이상 후보군 → 추천 2곳 선별.
+
+    1번째: 후보 전체에서 균등 랜덤.
+    2번째: 1번째와 Haversine 거리가 [1km, 3km]인 다른 후보에서 균등 랜덤.
+    해당 후보가 없으면 1번째를 제외한 후보에서 균등 랜덤.
+    """
     zones: list[PatrolZone] = []
     r_min = float(np.min(influence_map))
     r_max = float(np.max(influence_map))
@@ -145,13 +164,36 @@ def _zones_and_waypoints_from_grid(
             if nec >= ACCIDENT_INFLUENCE_THRESHOLD:
                 candidates.append((row, col, nec))
 
-    # 후보군에서 랜덤 2개 선택 (시드 기반으로 재현성 유지)
     rng = np.random.default_rng(slot_seed)
-    if len(candidates) > 2:
-        indices = rng.choice(len(candidates), size=2, replace=False)
-        selected = [candidates[i] for i in indices]
-    else:
+    selected: list[tuple[int, int, float]] = []
+
+    if not candidates:
+        selected = []
+    elif len(candidates) == 1:
         selected = list(candidates)
+    else:
+        i_first = int(rng.integers(0, len(candidates)))
+        first = candidates[i_first]
+        fr, fc, _nec_f = first
+        lat1, lng1 = grid_to_latlng(fr, fc, spec)
+
+        in_ring: list[tuple[int, int, float]] = []
+        for row, col, nec in candidates:
+            if (row, col) == (fr, fc):
+                continue
+            lat2, lng2 = grid_to_latlng(row, col, spec)
+            dist_m = _haversine_m(lat1, lng1, lat2, lng2)
+            if MIN_RECOMMENDATION_PAIR_DISTANCE_M <= dist_m <= MAX_RECOMMENDATION_PAIR_DISTANCE_M:
+                in_ring.append((row, col, nec))
+
+        if in_ring:
+            ir = int(rng.integers(0, len(in_ring)))
+            second = in_ring[ir]
+        else:
+            others_idx = [j for j in range(len(candidates)) if j != i_first]
+            j_pick = int(rng.integers(0, len(others_idx)))
+            second = candidates[others_idx[j_pick]]
+        selected = [first, second]
 
     for row, col, nec in selected:
         s = float(static_map[row, col])
